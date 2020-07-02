@@ -1,0 +1,113 @@
+Resources:
+  Database:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      BackupRetentionPeriod: '30'
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      Engine: mysql
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DatabaseRootUserSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DatabaseRootUserSecret}:SecretString:password}}'
+      AllocatedStorage: '50'
+      AllowMajorVersionUpgrade: true
+      AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
+      DBInstanceClass: db.r5.12xlarge
+      EngineVersion: '8.0'
+      MultiAZ: true
+      StorageType: gp2
+      PubliclyAccessible: true
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub
+        - Stack ${StackTagName} Environment ${EnvironmentTagName} Database ${ResourceName} VPC Subnets
+        - ResourceName: Database
+      SubnetIds: !Ref DefaultVPCSubnets
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Database ${ResourceName} VPC Subnets
+            - ResourceName: Database
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Database Security Group
+      SecurityGroupIngress:
+        CidrIp: 0.0.0.0/0
+        FromPort: 3306
+        IpProtocol: tcp
+        ToPort: 3306
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Database ${ResourceName} VPC Security Group
+            - ResourceName: Database
+      VpcId: !Ref DefaultVPCId
+  DatabaseRootUserSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub
+        - Root user login info for Stack ${StackTagName} Environment ${EnvironmentTagName} Database ${ResourceName}
+        - ResourceName: Database
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "root"}'
+        GenerateStringKey: password
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\'
+      Name: !Sub /${EnvironmentTagName}/${StackTagName}/Database/RootUser
+  DatabaseRootUserSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DatabaseRootUserSecret
+      TargetId: !Ref Database
+      TargetType: AWS::RDS::DBInstance
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-Function
+      Description: !Sub
+        - Stack ${StackTagName} Environment ${EnvironmentTagName} Function ${ResourceName}
+        - ResourceName: Function
+      CodeUri: src/Function
+      Handler: index.handler
+      Runtime: nodejs12.x
+      MemorySize: 3008
+      Timeout: 30
+      Tracing: Active
+      Policies:
+        - AWSXrayWriteOnlyAccess
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !Ref DatabaseRootUserSecret
+        - Statement:
+            - Effect: Allow
+              Action:
+                - rds-data:BatchExecuteStatement
+                - rds-data:BeginTransaction
+                - rds-data:CommitTransaction
+                - rds-data:ExecuteStatement
+                - rds-data:RollbackTransaction
+              Resource:
+                - !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${Database}
+      Environment:
+        Variables:
+          DB_ID: !Ref Database
+          DB_ADDRESS: !GetAtt Database.Endpoint.Address
+          DB_PORT: !GetAtt Database.Endpoint.Port
+          DB_ARN: !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${Database}
+          DB_ROOT_USER_SECRET_ARN: !Ref DatabaseRootUserSecret
+Parameters:
+  StackTagName:
+    Type: String
+    Description: Stack Name (injected by Stackery at deployment time)
+  EnvironmentTagName:
+    Type: String
+    Description: Environment Name (injected by Stackery at deployment time)
+  DefaultVPCId:
+    Type: AWS::EC2::VPC::Id
+    Description: AWS account-specific default VPC ID (injected by Stackery at deployment time)
+  DefaultVPCSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: AWS account-specific default VPC subnets (injected by Stackery at deployment time)
+Transform: AWS::Serverless-2016-10-31

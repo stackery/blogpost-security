@@ -1,0 +1,92 @@
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-Function
+      Description: !Sub
+        - Stack ${StackTagName} Environment ${EnvironmentTagName} Function ${ResourceName}
+        - ResourceName: Function
+      CodeUri: src/Function
+      Handler: index.handler
+      Runtime: nodejs12.x
+      MemorySize: 3008
+      Timeout: 30
+      Tracing: Active
+      Policies:
+        - AWSXrayWriteOnlyAccess
+  Database:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      BackupRetentionPeriod: 1
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      Engine: aurora
+      EngineMode: serverless
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DatabaseRootUserSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DatabaseRootUserSecret}:SecretString:password}}'
+      EnableHttpEndpoint: true
+      ScalingConfiguration:
+        AutoPause: false
+        MinCapacity: 2
+        MaxCapacity: 256
+      StorageEncrypted: true
+      VpcSecurityGroupIds:
+        - !Ref DatabaseSecurityGroup
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub
+        - Stack ${StackTagName} Environment ${EnvironmentTagName} Database ${ResourceName} VPC Subnets
+        - ResourceName: Database
+      SubnetIds: !Ref DefaultVPCSubnets
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Database ${ResourceName} VPC Subnets
+            - ResourceName: Database
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Database Security Group
+      SecurityGroupIngress:
+        CidrIp: 0.0.0.0/0
+        FromPort: 3306
+        IpProtocol: tcp
+        ToPort: 3306
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Database ${ResourceName} VPC Security Group
+            - ResourceName: Database
+      VpcId: !Ref DefaultVPCId
+  DatabaseRootUserSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub
+        - Root user login info for Stack ${StackTagName} Environment ${EnvironmentTagName} Database ${ResourceName}
+        - ResourceName: Database
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "root"}'
+        GenerateStringKey: password
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\'
+      Name: !Sub /${EnvironmentTagName}/${StackTagName}/Database/RootUser
+  DatabaseRootUserSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DatabaseRootUserSecret
+      TargetId: !Ref Database
+      TargetType: AWS::RDS::DBCluster
+Parameters:
+  StackTagName:
+    Type: String
+    Description: Stack Name (injected by Stackery at deployment time)
+  EnvironmentTagName:
+    Type: String
+    Description: Environment Name (injected by Stackery at deployment time)
+  DefaultVPCId:
+    Type: AWS::EC2::VPC::Id
+    Description: AWS account-specific default VPC ID (injected by Stackery at deployment time)
+  DefaultVPCSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: AWS account-specific default VPC subnets (injected by Stackery at deployment time)

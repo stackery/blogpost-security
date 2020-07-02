@@ -1,0 +1,335 @@
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-Function
+      Description: !Sub
+        - Stack ${StackTagName} Environment ${EnvironmentTagName} Function ${ResourceName}
+        - ResourceName: Function
+      CodeUri: src/Function
+      Handler: index.handler
+      Runtime: nodejs12.x
+      MemorySize: 3008
+      Timeout: 30
+      Tracing: Active
+      Policies:
+        - AWSXrayWriteOnlyAccess
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !Ref DatabaseRootUserSecret
+        - Statement:
+            - Effect: Allow
+              Action:
+                - rds-data:BatchExecuteStatement
+                - rds-data:BeginTransaction
+                - rds-data:CommitTransaction
+                - rds-data:ExecuteStatement
+                - rds-data:RollbackTransaction
+              Resource:
+                - !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${Database}
+        - AWSLambdaENIManagementAccess
+      Environment:
+        Variables:
+          DB_ID: !Ref Database
+          DB_ADDRESS: !GetAtt Database.Endpoint.Address
+          DB_PORT: !GetAtt Database.Endpoint.Port
+          DB_ARN: !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${Database}
+          DB_ROOT_USER_SECRET_ARN: !Ref DatabaseRootUserSecret
+      VpcConfig:
+        SecurityGroupIds:
+          - !GetAtt VirtualNetwork.DefaultSecurityGroup
+        SubnetIds:
+          - !Ref VirtualNetworkPrivateSubnet1
+          - !Ref VirtualNetworkPrivateSubnet2
+  Database:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      BackupRetentionPeriod: '30'
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      Engine: mysql
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DatabaseRootUserSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DatabaseRootUserSecret}:SecretString:password}}'
+      AllocatedStorage: '50'
+      AllowMajorVersionUpgrade: true
+      AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
+      DBInstanceClass: db.r5.12xlarge
+      EngineVersion: '8.0'
+      MultiAZ: true
+      StorageType: gp2
+      PubliclyAccessible: false
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub
+        - Stack ${StackTagName} Environment ${EnvironmentTagName} Database ${ResourceName} VPC Subnets
+        - ResourceName: Database
+      SubnetIds:
+        - !Ref VirtualNetworkPrivateSubnet1
+        - !Ref VirtualNetworkPrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Database ${ResourceName} VPC Subnets
+            - ResourceName: Database
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Database Security Group
+      SecurityGroupIngress:
+        CidrIp: 0.0.0.0/0
+        FromPort: 3306
+        IpProtocol: tcp
+        ToPort: 3306
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Database ${ResourceName} VPC Security Group
+            - ResourceName: Database
+      VpcId: !Ref VirtualNetwork
+  DatabaseRootUserSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub
+        - Root user login info for Stack ${StackTagName} Environment ${EnvironmentTagName} Database ${ResourceName}
+        - ResourceName: Database
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "root"}'
+        GenerateStringKey: password
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\'
+      Name: !Sub /${EnvironmentTagName}/${StackTagName}/Database/RootUser
+  DatabaseRootUserSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DatabaseRootUserSecret
+      TargetId: !Ref Database
+      TargetType: AWS::RDS::DBInstance
+  VirtualNetwork:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Virtual Network ${ResourceName}
+            - ResourceName: VirtualNetwork
+  VirtualNetworkPrivateSubnet1:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      CidrBlock: !Select
+        - 0
+        - !Cidr
+          - 10.0.0.0/16
+          - 4
+          - 14
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Virtual Network ${ResourceName} Private Subnet 1
+            - ResourceName: VirtualNetwork
+      VpcId: !Ref VirtualNetwork
+  VirtualNetworkPrivateSubnet2:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      CidrBlock: !Select
+        - 1
+        - !Cidr
+          - 10.0.0.0/16
+          - 4
+          - 14
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Virtual Network ${ResourceName} Private Subnet 2
+            - ResourceName: VirtualNetwork
+      VpcId: !Ref VirtualNetwork
+  VirtualNetworkPublicSubnet1:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      CidrBlock: !Select
+        - 2
+        - !Cidr
+          - 10.0.0.0/16
+          - 4
+          - 14
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Virtual Network ${ResourceName} Public Subnet 1
+            - ResourceName: VirtualNetwork
+      VpcId: !Ref VirtualNetwork
+  VirtualNetworkPublicSubnet2:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      CidrBlock: !Select
+        - 3
+        - !Cidr
+          - 10.0.0.0/16
+          - 4
+          - 14
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Virtual Network ${ResourceName} Public Subnet 2
+            - ResourceName: VirtualNetwork
+      VpcId: !Ref VirtualNetwork
+  VirtualNetworkPrivateSubnet1NatGatewayEIP:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  VirtualNetworkPrivateSubnet1NatGateway:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt VirtualNetworkPrivateSubnet1NatGatewayEIP.AllocationId
+      SubnetId: !Ref VirtualNetworkPublicSubnet1
+  VirtualNetworkPrivateSubnet1RouteTable:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Virtual Network ${ResourceName} Private Subnet 1 Route Table
+            - ResourceName: VirtualNetwork
+      VpcId: !Ref VirtualNetwork
+  VirtualNetworkPrivateSubnet1NatGatewayRoute:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref VirtualNetworkPrivateSubnet1NatGateway
+      RouteTableId: !Ref VirtualNetworkPrivateSubnet1RouteTable
+  VirtualNetworkPrivateSubnet1RouteTableAssociation:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref VirtualNetworkPrivateSubnet1RouteTable
+      SubnetId: !Ref VirtualNetworkPrivateSubnet1
+  VirtualNetworkPrivateSubnet2NatGatewayEIP:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  VirtualNetworkPrivateSubnet2NatGateway:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt VirtualNetworkPrivateSubnet2NatGatewayEIP.AllocationId
+      SubnetId: !Ref VirtualNetworkPublicSubnet2
+  VirtualNetworkPrivateSubnet2RouteTable:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Virtual Network ${ResourceName} Private Subnet 2 Route Table
+            - ResourceName: VirtualNetwork
+      VpcId: !Ref VirtualNetwork
+  VirtualNetworkPrivateSubnet2NatGatewayRoute:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref VirtualNetworkPrivateSubnet2NatGateway
+      RouteTableId: !Ref VirtualNetworkPrivateSubnet2RouteTable
+  VirtualNetworkPrivateSubnet2RouteTableAssociation:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref VirtualNetworkPrivateSubnet2RouteTable
+      SubnetId: !Ref VirtualNetworkPrivateSubnet2
+  VirtualNetworkPublicSubnetsInternetGateway:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Virtual Network ${ResourceName} Public Subnets Internet Gateway
+            - ResourceName: VirtualNetwork
+  VirtualNetworkPublicSubnetsInternetGatewayAttachment:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref VirtualNetworkPublicSubnetsInternetGateway
+      VpcId: !Ref VirtualNetwork
+  VirtualNetworkPublicSubnetsRouteTable:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - Stack ${StackTagName} Environment ${EnvironmentTagName} Virtual Network ${ResourceName} Public Subnets Route Table
+            - ResourceName: VirtualNetwork
+      VpcId: !Ref VirtualNetwork
+  VirtualNetworkPublicSubnetsInternetGatewayRoute:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref VirtualNetworkPublicSubnetsInternetGateway
+      RouteTableId: !Ref VirtualNetworkPublicSubnetsRouteTable
+  VirtualNetworkPublicSubnet1RouteTableAssociation:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref VirtualNetworkPublicSubnetsRouteTable
+      SubnetId: !Ref VirtualNetworkPublicSubnet1
+  VirtualNetworkPublicSubnet2RouteTableAssociation:
+    Metadata:
+      StackeryManaged: true
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref VirtualNetworkPublicSubnetsRouteTable
+      SubnetId: !Ref VirtualNetworkPublicSubnet2
+Parameters:
+  StackTagName:
+    Type: String
+    Description: Stack Name (injected by Stackery at deployment time)
+  EnvironmentTagName:
+    Type: String
+    Description: Environment Name (injected by Stackery at deployment time)
